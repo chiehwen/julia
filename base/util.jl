@@ -393,6 +393,9 @@ function warn_once(msg::String...)
     warn(msg)
 end
 
+
+# system information
+
 ver() = ver(false)
 ver(verbose::Bool) = ver(OUTPUT_STREAM, verbose)
 function ver(io::IO, verbose::Bool)
@@ -403,11 +406,16 @@ function ver(io::IO, verbose::Bool)
     println(io, "Platform Info:")
     println(io, "  OS_NAME: ",OS_NAME)
   if verbose
-  lsb = readchomp(ignorestatus(`lsb_release -ds`))
-  if lsb != ""
+   lsb = readchomp(ignorestatus(`lsb_release -ds`) .> SpawnNullStream())
+   if lsb != ""
     println(io, "           ",lsb)
-  end
+   end
     println(io, "  uname: ",readchomp(`uname -mprsv`))
+    println(io, "Memory: $(total_memory()/2^30) GB ($(free_memory()/2^20) MB free)")
+    println(io, "Uptime: $(uptime()) sec")
+    print(io, "Load Avg: ")
+        print_matrix(io,Base.loadavg()')
+        println()
     println(io, cpu_info())
   end
   if USE_LIB64
@@ -419,6 +427,13 @@ function ver(io::IO, verbose::Bool)
     println(io, "  Lapack: ",liblapack_name)
     println(io, "  Libm: ",libm_name)
   if verbose
+    println(io, "Environment:")
+   for (k,v) in ENV
+       if !is(match(r"JULIA|PATH|FLAG|^TERM$|HOME",k), nothing)
+           println(io, "  $(k) = $(v)")
+       end
+   end
+    println(io)
     println(io, "Packages Installed:")
     Pkg.status(io)
   end
@@ -447,6 +462,7 @@ end
 CPUinfo(info::UV_cpu_info_t, ticks) = CPUinfo(bytestring(info.model), info.speed,
     info.cpu_times!user, info.cpu_times!nice, info.cpu_times!sys,
     info.cpu_times!idle, info.cpu_times!irq, ticks)
+
 show(io::IO, cpu::CPUinfo) = show(io, cpu, true, "    ")
 function show(io::IO, info::CPUinfo, header::Bool, prefix::String)
     tck = info.SC_CLK_TCK 
@@ -461,15 +477,16 @@ function show(io::IO, info::CPUinfo, header::Bool, prefix::String)
     end
     print(prefix)
     if tck > 0
-        @printf io "%5d Hz  %9d s  %9d s  %9d s  %9d s  %9d s\n" info.speed info.cpu_times!user/tck info.cpu_times!nice/tck info.cpu_times!sys/tck info.cpu_times!idle/tck info.cpu_times!irq/tck
+        @printf io "%5d Hz  %9d s  %9d s  %9d s  %9d s  %9d s" info.speed info.cpu_times!user/tck info.cpu_times!nice/tck info.cpu_times!sys/tck info.cpu_times!idle/tck info.cpu_times!irq/tck
     else
-        @printf io "%5d Hz  %9d  %9d  %9d  %9d  %9d ticks\n" info.speed info.cpu_times!user info.cpu_times!nice info.cpu_times!sys info.cpu_times!idle info.cpu_times!irq
+        @printf io "%5d Hz  %9d  %9d  %9d  %9d  %9d ticks" info.speed info.cpu_times!user info.cpu_times!nice info.cpu_times!sys info.cpu_times!idle info.cpu_times!irq
     end
 end
 function cpu_summary(io::IO, cpu::Array{CPUinfo}, i, j)
     if j-i < 9
         header = true
         for x = i:j
+            if header == false println() end
             show(io,cpu[x],header,"#$(x-i+1) ")
             header = false
         end
@@ -512,3 +529,19 @@ function cpu_info()
     ccall(:uv_free_cpu_info, Void, (Ptr{UV_cpu_info_t}, Int32), UVcpus[1], count[1])
     cpus
 end
+
+function uptime()
+    uptime_ = Array(Float64,1)
+    uv_error("uv_uptime",ccall(:uv_uptime, UV_error_t, (Ptr{Float64},), uptime_))
+    return uptime_[1]
+end
+
+function loadavg()
+    loadavg_ = Array(Float64,3)
+    ccall(:uv_loadavg, Void, (Ptr{Float64},), loadavg_)
+    return loadavg_
+end
+
+free_memory() = ccall(:uv_get_free_memory, Uint64, ())
+total_memory() = ccall(:uv_get_total_memory, Uint64, ())
+
